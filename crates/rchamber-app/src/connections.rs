@@ -6,6 +6,14 @@ use serde::{Deserialize, Serialize};
 
 pub const CONNECTIONS_VERSION: u32 = 2;
 
+/// Key used for projects that belong to the managed local server rather than a
+/// saved connection.
+pub const LOCAL_SERVER_KEY: &str = "local";
+
+pub fn server_key(connection: Option<&str>) -> String {
+    connection.unwrap_or(LOCAL_SERVER_KEY).to_string()
+}
+
 fn default_version() -> u32 {
     0
 }

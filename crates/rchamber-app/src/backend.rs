@@ -380,7 +380,10 @@ impl Inner {
             Err(err) => self.error("Could not load commands", err),
         }
         match projects {
-            Ok(projects) => self.emit(BackendEvent::Projects(projects)),
+            Ok(projects) => self.emit(BackendEvent::Projects {
+                connection: self.connections.active_id().map(str::to_string),
+                projects,
+            }),
             Err(err) => self.error("Could not load projects", err),
         }
         match vcs {
@@ -791,7 +794,10 @@ impl Inner {
                 self.reload_snippets(next.directory());
                 self.refresh_sessions(&next).await;
                 match next.projects().await {
-                    Ok(projects) => self.emit(BackendEvent::Projects(projects)),
+                    Ok(projects) => self.emit(BackendEvent::Projects {
+                        connection: self.connections.active_id().map(str::to_string),
+                        projects,
+                    }),
                     Err(err) => self.error("Could not load projects", err),
                 }
             }
@@ -2264,7 +2270,7 @@ fn event_kind(event: &BackendEvent) -> &'static str {
         BackendEvent::Providers(_) => "providers",
         BackendEvent::Agents(_) => "agents",
         BackendEvent::Commands(_) => "commands",
-        BackendEvent::Projects(_) => "projects",
+        BackendEvent::Projects { .. } => "projects",
         BackendEvent::SessionMetadataUpdated(_) => "session-metadata-updated",
         BackendEvent::SessionViewed { .. } => "session-viewed",
         BackendEvent::SessionPreview { .. } => "session-preview",

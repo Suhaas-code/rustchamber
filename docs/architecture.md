@@ -86,8 +86,9 @@ kill the server. A remote bind collision retries with a new remote port up to th
 The client connects to the local loopback port, so the rest of the app treats SSH exactly
 like an endpoint. The ssh child and its stdin hang off `ServerHandle`; dropping the handle
 kills both. The backend also checks the ssh child once per second and reconnects if the
-tunnel dies. Flatpak routes the host `ssh` through `flatpak-spawn --host`. Directory
-requests still carry the open project path, so that path must exist on the remote host.
+tunnel dies. Flatpak routes the host `ssh` through `flatpak-spawn --host`. Project lists
+are cached per connection, so the Add project dialog shows one rail entry per saved server
+and imports from the server that reported the project.
 
 ## Events
 

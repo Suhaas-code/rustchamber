@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-**Server connections.** Settings → General now lists the managed OpenCode server, saved HTTP endpoints, and SSH hosts on one page. SSH starts `opencode serve` on the remote host and tunnels it through one loopback connection. Each SSH entry can set a remote folder. The first connection records a new host key.
+**Server connections.** Settings → General now lists the managed OpenCode server, saved HTTP endpoints, and SSH hosts on one page. SSH starts `opencode serve` on the remote host and tunnels it through one loopback connection. Each SSH entry can set a remote folder. The first connection records a new host key. Add project lists every saved server by name and shows SSH projects as available.
 
 - The Changes surface is a real diff workbench: unified or split rows, intraline
   emphasis, foldable hunks, a file-list toolbar, and stage, unstage and discard actions

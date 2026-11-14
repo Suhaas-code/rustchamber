@@ -1425,7 +1425,7 @@ fn onboarding(ui: &mut Ui, app: &mut RustChamber, p: &Palette, area: Rect) {
         }
         Some(OnboardAction::Import) => {
             app.open_add_project();
-            app.ui.add_project.tab = crate::add_project::Tab::OpenCode;
+            app.ui.add_project.tab = crate::add_project::Tab::Server(app.model.active_server_key());
         }
         None => {}
     }

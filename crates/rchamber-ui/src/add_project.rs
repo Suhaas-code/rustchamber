@@ -32,24 +32,62 @@ const RAIL_GLYPH: f32 = 15.0;
 const CONTENT_GLYPH: f32 = 16.0;
 const GAP: f32 = 6.0;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Tab {
     #[default]
     Home,
     Projects,
     Clone,
-    OpenCode,
+    Server(String),
 }
 
 impl Tab {
-    fn subtitle(self) -> &'static str {
+    fn subtitle(&self, server: Option<&str>) -> String {
         match self {
-            Tab::Home => "Choose a folder to add to the sidebar.",
-            Tab::Projects => "Projects already in this window.",
-            Tab::Clone => "Clone a Git repository and add it.",
-            Tab::OpenCode => "Import projects registered in OpenCode.",
+            Tab::Home => "Choose a folder to add to the sidebar.".into(),
+            Tab::Projects => "Projects already in this window.".into(),
+            Tab::Clone => "Clone a Git repository and add it.".into(),
+            Tab::Server(_) => match server {
+                Some(name) => format!("Import projects registered on {name}."),
+                None => "Import projects registered in OpenCode.".into(),
+            },
         }
     }
+}
+
+/// One entry in the add project rail: the managed local server plus every
+/// saved connection.
+#[derive(Clone, Debug)]
+pub struct ServerItem {
+    pub key: String,
+    pub label: String,
+    pub local: bool,
+    pub projects: Vec<Project>,
+}
+
+pub fn server_items(app: &RustChamber) -> Vec<ServerItem> {
+    let mut items = vec![ServerItem {
+        key: rchamber_app::LOCAL_SERVER_KEY.to_string(),
+        label: "Local server".into(),
+        local: true,
+        projects: app
+            .model
+            .projects_for_connection(rchamber_app::LOCAL_SERVER_KEY)
+            .to_vec(),
+    }];
+    items.extend(
+        app.model
+            .connections
+            .connections()
+            .iter()
+            .map(|connection| ServerItem {
+                key: connection.id.clone(),
+                label: connection.display_name(),
+                local: false,
+                projects: app.model.projects_for_connection(&connection.id).to_vec(),
+            }),
+    );
+    items
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -370,7 +408,18 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
         .into_iter()
         .cloned()
         .collect();
-    let opencode: Vec<Project> = app.model.projects.clone();
+    let opencode = server_items(app);
+    let active_server = app.model.active_server_key();
+    let subtitle = {
+        let label = match &app.ui.add_project.tab {
+            Tab::Server(key) => opencode
+                .iter()
+                .find(|item| &item.key == key)
+                .map(|item| item.label.as_str()),
+            _ => None,
+        };
+        app.ui.add_project.tab.subtitle(label)
+    };
     let active_directory = app
         .model
         .workspace
@@ -419,6 +468,7 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                 &mut rail_ui,
                 state,
                 &projects,
+                &opencode,
                 active_directory.as_deref(),
                 &p,
             );
@@ -438,7 +488,7 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                     footer_rect.top() - FOOTER_GAP,
                 ),
             );
-            header(ui, header_rect, state, &p, &mut outcome);
+            header(ui, header_rect, &subtitle, &p, &mut outcome);
 
             let mut body_ui = ui.new_child(
                 UiBuilder::new()
@@ -446,7 +496,7 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                     .layout(Layout::top_down(Align::Min)),
             );
             body_ui.set_clip_rect(body_rect);
-            match state.tab {
+            match &state.tab {
                 Tab::Home => home_tab(&mut body_ui, state, &projects, &p, &mut outcome),
                 Tab::Projects => projects_tab(
                     &mut body_ui,
@@ -457,8 +507,18 @@ pub fn show(ctx: &egui::Context, app: &mut RustChamber) {
                     &mut outcome,
                 ),
                 Tab::Clone => clone_tab(&mut body_ui, state, &projects, &p),
-                Tab::OpenCode => {
-                    opencode_tab(&mut body_ui, state, &projects, &opencode, &p, &mut outcome)
+                Tab::Server(key) => {
+                    if let Some(server) = opencode.iter().find(|item| &item.key == key) {
+                        opencode_tab(
+                            &mut body_ui,
+                            state,
+                            &projects,
+                            server,
+                            &active_server == key,
+                            &p,
+                            &mut outcome,
+                        );
+                    }
                 }
             }
 
@@ -521,6 +581,7 @@ fn rail(
     ui: &mut Ui,
     state: &mut State,
     projects: &[ProjectEntry],
+    servers: &[ServerItem],
     active_directory: Option<&Path>,
     p: &Palette,
 ) {
@@ -584,18 +645,15 @@ fn rail(
         state.sync_clone_listing(projects);
     }
     ui.add_space(2.0);
-    if rail_item(
-        ui,
-        p,
-        Icon::Bot,
-        "From OpenCode",
-        state.tab == Tab::OpenCode,
-    )
-    .clicked()
-    {
-        state.tab = Tab::OpenCode;
-        state.query.clear();
-        state.error = None;
+    widgets::section_label(ui, "Servers", p);
+    ui.add_space(4.0);
+    for server in servers {
+        let selected = matches!(&state.tab, Tab::Server(key) if key == &server.key);
+        if rail_item(ui, p, Icon::Bot, &server.label, selected).clicked() {
+            state.tab = Tab::Server(server.key.clone());
+            state.query.clear();
+            state.error = None;
+        }
     }
 }
 
@@ -648,7 +706,7 @@ fn rail_root(ui: &mut Ui, p: &Palette, label: &str, path: &str) -> egui::Respons
     response.on_hover_text(path)
 }
 
-fn header(ui: &mut Ui, rect: Rect, state: &State, p: &Palette, outcome: &mut Outcome) {
+fn header(ui: &mut Ui, rect: Rect, subtitle: &str, p: &Palette, outcome: &mut Outcome) {
     ui.painter().text(
         Pos2::new(rect.left() + CONTENT_PAD, rect.top() + 13.0),
         Align2::LEFT_TOP,
@@ -659,7 +717,7 @@ fn header(ui: &mut Ui, rect: Rect, state: &State, p: &Palette, outcome: &mut Out
     ui.painter().text(
         Pos2::new(rect.left() + CONTENT_PAD, rect.top() + 34.0),
         Align2::LEFT_TOP,
-        state.tab.subtitle(),
+        subtitle,
         theme::font(theme::TEXT_META),
         p.fg_muted,
     );
@@ -903,21 +961,24 @@ fn opencode_tab(
     ui: &mut Ui,
     state: &mut State,
     projects: &[ProjectEntry],
-    opencode: &[Project],
+    server: &ServerItem,
+    active: bool,
     p: &Palette,
     outcome: &mut Outcome,
 ) {
+    let placeholder = format!("Search {} projects…", server.label);
     ui.add_space(4.0);
     widgets::search_field(
         ui,
         &mut state.query,
-        "Search OpenCode projects…",
+        &placeholder,
         p,
         Id::unique("add-project/opencode-search"),
     );
     ui.add_space(GAP);
     let needle = state.query.trim().to_lowercase();
-    let filtered: Vec<&Project> = opencode
+    let filtered: Vec<&Project> = server
+        .projects
         .iter()
         .filter(|project| {
             needle.is_empty()
@@ -927,24 +988,30 @@ fn opencode_tab(
         .collect();
     let list_height = ui.available_height().max(80.0);
     ScrollArea::vertical()
-        .id_salt("add-project/opencode")
+        .id_salt(("add-project/opencode", &server.key))
         .max_height(list_height)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             if filtered.is_empty() {
-                let text = if opencode.is_empty() {
-                    "Connect to OpenCode to see its projects."
+                if server.projects.is_empty() {
+                    let text = if active {
+                        format!("{} lists no projects.", server.label)
+                    } else {
+                        format!("Connect to {} to see its projects.", server.label)
+                    };
+                    empty_state(ui, p, Icon::Bot, "No projects", &text);
                 } else {
-                    "No matching projects."
-                };
-                empty_state(ui, p, Icon::Bot, "No projects", text);
+                    empty_state(ui, p, Icon::Bot, "No projects", "No matching projects.");
+                }
                 return;
             }
             for project in filtered {
                 let path = Path::new(&project.canonical);
                 let is_added = added(projects, path);
-                let available = path.is_dir();
+                // A remote server knows its own folders; the local check only
+                // applies to the managed local server.
+                let available = if server.local { path.is_dir() } else { true };
                 if opencode_row(ui, p, project, is_added, available) {
                     outcome.opencode = Some((project.canonical.clone(), project.name.clone()));
                 }
@@ -1143,7 +1210,7 @@ fn footer(
     );
     footer_ui.set_clip_rect(inner);
     footer_ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        match state.tab {
+        match &state.tab {
             Tab::Home => {
                 let target = state.target_path();
                 let current_added = added(projects, &target);
@@ -1195,16 +1262,16 @@ fn footer(
                     outcome.clone = true;
                 }
             }
-            Tab::Projects | Tab::OpenCode => {
+            Tab::Projects | Tab::Server(_) => {
                 if widgets::ghost_button(ui, "Done", None, p).clicked() {
                     outcome.close = true;
                 }
             }
         }
-        let finder = match state.tab {
+        let finder = match &state.tab {
             Tab::Home => Some(state.path.clone()),
             Tab::Clone => Some(state.clone_base.clone()),
-            Tab::Projects | Tab::OpenCode => active_directory
+            Tab::Projects | Tab::Server(_) => active_directory
                 .map(Path::to_path_buf)
                 .or_else(|| Some(state.path.clone())),
         };
@@ -1849,6 +1916,24 @@ mod tests {
         let projects = vec![entry("p1", "/tmp/example/")];
         assert!(added(&projects, Path::new("/tmp/example")));
         assert!(!added(&projects, Path::new("/tmp/other")));
+    }
+
+    #[test]
+    fn server_tabs_use_the_connection_name() {
+        let tab = Tab::Server("conn:1".into());
+        assert_eq!(
+            tab.subtitle(Some("Blueroom")),
+            "Import projects registered on Blueroom."
+        );
+        assert_eq!(
+            tab.subtitle(None),
+            "Import projects registered in OpenCode."
+        );
+        assert_eq!(
+            Tab::Home.subtitle(None),
+            "Choose a folder to add to the sidebar."
+        );
+        assert_ne!(tab, Tab::Server("conn:2".into()));
     }
 
     #[test]

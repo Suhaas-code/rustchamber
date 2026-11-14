@@ -289,6 +289,7 @@ pub struct AppModel {
     pub session_previews: HashMap<String, String>,
     pub preview_pending: HashSet<String>,
     pub projects: Vec<Project>,
+    pub projects_by_connection: HashMap<String, Vec<Project>>,
     pub workspace_store: WorkspaceStore,
     pub connections: ConnectionsStore,
     pub models: Vec<Model>,
@@ -333,6 +334,7 @@ impl Default for AppModel {
             session_previews: HashMap::new(),
             preview_pending: HashSet::new(),
             projects: Vec::new(),
+            projects_by_connection: HashMap::new(),
             workspace_store: WorkspaceStore::load(),
             connections: ConnectionsStore::load(),
             models: Vec::new(),
@@ -461,8 +463,16 @@ impl AppModel {
             BackendEvent::Providers(providers) => self.providers = providers,
             BackendEvent::Agents(agents) => self.agents = agents,
             BackendEvent::Commands(commands) => self.commands = commands,
-            BackendEvent::Projects(projects) => {
-                self.projects = projects;
+            BackendEvent::Projects {
+                connection,
+                projects,
+            } => {
+                let key = crate::connections::server_key(connection.as_deref());
+                self.projects_by_connection
+                    .insert(key.clone(), projects.clone());
+                if key == self.active_server_key() {
+                    self.projects = projects;
+                }
             }
             BackendEvent::SessionMetadataUpdated(session) => {
                 let session = *session;
@@ -1208,6 +1218,18 @@ impl AppModel {
 
     pub fn workspace_projects(&self) -> Vec<&ProjectEntry> {
         self.workspace_store.ordered_projects()
+    }
+
+    /// Stable key for the server the window is currently connected to.
+    pub fn active_server_key(&self) -> String {
+        crate::connections::server_key(self.connections.active_id())
+    }
+
+    pub fn projects_for_connection(&self, key: &str) -> &[Project] {
+        self.projects_by_connection
+            .get(key)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 
     pub fn project_by_id(&self, id: &str) -> Option<&ProjectEntry> {

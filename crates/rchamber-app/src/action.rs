@@ -177,7 +177,10 @@ pub enum BackendEvent {
     Providers(Vec<rchamber_api::models::Provider>),
     Agents(Vec<rchamber_api::models::Agent>),
     Commands(Vec<rchamber_api::models::Command>),
-    Projects(Vec<Project>),
+    Projects {
+        connection: Option<String>,
+        projects: Vec<Project>,
+    },
     SessionMetadataUpdated(Box<Session>),
     SessionViewed {
         id: String,

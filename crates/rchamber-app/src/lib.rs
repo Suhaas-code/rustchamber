@@ -15,7 +15,8 @@ pub use action::{
 };
 pub use backend::{ActionSink, Backend, Wake};
 pub use connections::{
-    CONNECTIONS_VERSION, ConnectionDraft, ConnectionKind, ConnectionsStore, SavedConnection,
+    CONNECTIONS_VERSION, ConnectionDraft, ConnectionKind, ConnectionsStore, LOCAL_SERVER_KEY,
+    SavedConnection, server_key,
 };
 pub use state::{AppModel, Chat, Startup, Toast, now_ms};
 pub use workspace::{

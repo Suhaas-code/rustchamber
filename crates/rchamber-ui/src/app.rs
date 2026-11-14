@@ -588,7 +588,7 @@ impl RustChamber {
             ui.add_project.tab = match panel.as_str() {
                 "clone" => crate::add_project::Tab::Clone,
                 "projects" => crate::add_project::Tab::Projects,
-                "opencode" => crate::add_project::Tab::OpenCode,
+                "opencode" => crate::add_project::Tab::Server(model.active_server_key()),
                 _ => crate::add_project::Tab::Home,
             };
             if ui.add_project.tab == crate::add_project::Tab::Clone {

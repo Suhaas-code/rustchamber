@@ -158,7 +158,7 @@ Flatpak routes ssh through `flatpak-spawn --host`.
 
 Windows compiles; SSH connections there are untested.
 
-Remote projects use remote paths. The open project path must exist on the remote host. RustChamber does not translate paths.
+Remote projects use remote paths. The open project path must exist on the remote host. RustChamber does not translate paths. Remote projects are listed under their connection in Add project and are never marked missing.
 
 Tunnel reconnect has no backoff cap yet.
 
