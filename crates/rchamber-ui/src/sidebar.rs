@@ -3171,8 +3171,20 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         Stroke::new(theme::BORDER, p.border),
     );
     let response = ui.interact(rect, egui::Id::unique("sidebar-footer"), Sense::hover());
+    let ready_label = if app
+        .model
+        .connections
+        .active_connection()
+        .is_some_and(|connection| connection.is_ssh())
+    {
+        "SSH"
+    } else if app.model.connections.active_connection().is_some() {
+        "Remote"
+    } else {
+        "Local"
+    };
     let (color, status) = match &app.model.connection {
-        Connection::Ready => (p.green, "Local"),
+        Connection::Ready => (p.green, ready_label),
         Connection::Connecting => (p.primary, "Starting"),
         Connection::Reconnecting(_) => (p.coral, "Reconnecting"),
         Connection::Failed(_) => (p.red, "Offline"),
@@ -3222,18 +3234,19 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         .as_ref()
         .map(|server| format!("OpenCode {}", server.version))
         .unwrap_or_else(|| "OpenCode server".into());
-    let endpoint = app
-        .settings
-        .endpoint
-        .clone()
-        .filter(|value| !value.trim().is_empty())
+    let active_connection = app.model.connections.active_connection();
+    let endpoint = active_connection
+        .map(|connection| connection.summary().to_string())
         .or_else(|| {
             app.model
                 .server
                 .as_ref()
                 .and_then(|server| server.urls.first().cloned())
         })
-        .unwrap_or_else(|| "127.0.0.1".into());
+        .unwrap_or_else(|| "Managed local server".into());
+    let current_name = active_connection
+        .map(|connection| connection.display_name().to_string())
+        .unwrap_or_else(|| "Local".into());
     let _ = response.on_hover_text(format!("{detail}\n{endpoint}"));
 
     let popup_id = egui::Id::unique("sidebar-instance-popup");
@@ -3254,12 +3267,12 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                     .color(p.fg_muted),
             );
             ui.label(
-                RichText::new("Local")
+                RichText::new(&current_name)
                     .font(theme::font_semibold(theme::TEXT_UI_LABEL))
                     .color(p.fg),
             );
             ui.label(
-                RichText::new("· Default")
+                RichText::new("· Active")
                     .font(theme::font(theme::TEXT_META))
                     .color(p.fg_faint),
             );
@@ -3268,7 +3281,8 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                     crate::widgets::icon_button_hit(ui, Icon::Refresh, 13.0, 24.0, p.fg_muted)
                         .on_hover_text("Reconnect");
                 if refresh.clicked() {
-                    app.apply_connection_settings();
+                    let id = app.model.connections.active_id().map(str::to_string);
+                    app.connect_server(id);
                 }
             });
         });
@@ -3282,16 +3296,16 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
                 ui.spacing_mut().item_spacing = Vec2::new(8.0, 4.0);
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("Local")
+                        RichText::new(&current_name)
                             .font(theme::font_semibold(theme::TEXT_UI_LABEL))
                             .color(p.fg),
                     );
                     crate::widgets::tag_chip(ui, "Current", p);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         crate::widgets::icon_button_hit(ui, Icon::Layers, 14.0, 24.0, p.fg_muted)
-                            .on_hover_text("Local server");
+                            .on_hover_text("Active server");
                         crate::widgets::icon_button_hit(ui, Icon::Pin, 14.0, 24.0, p.primary)
-                            .on_hover_text("Default instance");
+                            .on_hover_text("Saved connection");
                     });
                 });
                 ui.horizontal(|ui| {
@@ -3342,25 +3356,12 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         ui.painter().text(
             egui::Pos2::new(row.left() + 28.0, row.center().y),
             egui::Align2::LEFT_CENTER,
-            "Add instance",
+            "Add server",
             theme::font(theme::TEXT_UI_LABEL),
             p.fg,
         );
-        let chip = egui::Rect::from_min_size(
-            egui::Pos2::new(row.right() - 92.0, row.center().y - 9.0),
-            Vec2::new(80.0, 18.0),
-        );
-        ui.painter()
-            .rect_filled(chip, CornerRadius::same(theme::radius::XS), p.tag_bg);
-        ui.painter().text(
-            chip.center(),
-            egui::Align2::CENTER_CENTER,
-            "Coming soon",
-            theme::font_mono(10.0),
-            p.fg_faint,
-        );
         if response
-            .on_hover_text("Remote instances are not available yet")
+            .on_hover_text("Manage endpoints and SSH servers")
             .clicked()
         {
             add_instance = true;
@@ -3368,7 +3369,7 @@ fn footer(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
     });
     if add_instance {
         app.open_settings();
-        crate::settings::open_page(ui.ctx(), 0);
+        crate::settings::open_server(ui.ctx());
         open = false;
     }
     ui.data_mut(|data| data.insert_temp(popup_id, open));

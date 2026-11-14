@@ -56,7 +56,7 @@ icons, AppStream metadata, and `install.sh`. Versions with a prerelease suffix, 
 `0.1.0-beta`, are published as a GitHub prerelease automatically.
 
 Before tagging, bump the workspace version in `Cargo.toml` and add the matching section to
-`CHANGELOG.md`.
+`docs/CHANGELOG.md`.
 
 ## Homebrew tap
 
@@ -253,7 +253,7 @@ Windows is still unsupported. Adding it means a `windows-2025` job that packages
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `cargo test --workspace`
 - [ ] Version updated in `Cargo.toml`
-- [ ] `CHANGELOG.md` updated
+- [ ] `docs/CHANGELOG.md` updated
 - [ ] Screenshots current
 - [ ] `git status` contains no `labs/`, `target/`, or `dist/`
 - [ ] Tag pushed

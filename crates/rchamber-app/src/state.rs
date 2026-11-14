@@ -12,6 +12,7 @@ use crate::action::{
     BackendEvent, Connection, ExecutionState, LiveEvent, ToastKind, TrackedProject,
 };
 use crate::attachments::AttachmentItem;
+use crate::connections::ConnectionsStore;
 use crate::snippets::Snippet;
 use crate::workspace::{ProjectEntry, WorkspaceStore, paths_match};
 
@@ -289,6 +290,7 @@ pub struct AppModel {
     pub preview_pending: HashSet<String>,
     pub projects: Vec<Project>,
     pub workspace_store: WorkspaceStore,
+    pub connections: ConnectionsStore,
     pub models: Vec<Model>,
     pub providers: Vec<Provider>,
     pub agents: Vec<Agent>,
@@ -332,6 +334,7 @@ impl Default for AppModel {
             preview_pending: HashSet::new(),
             projects: Vec::new(),
             workspace_store: WorkspaceStore::load(),
+            connections: ConnectionsStore::load(),
             models: Vec::new(),
             providers: Vec::new(),
             agents: Vec::new(),
@@ -531,6 +534,12 @@ impl AppModel {
                 }
             }
             BackendEvent::Toast { kind, message } => self.toast(kind, message),
+            BackendEvent::Connections {
+                connections,
+                active,
+            } => {
+                self.connections.replace_entries(connections, active);
+            }
             BackendEvent::WorkspaceChanged(directory) => {
                 self.save_draft();
                 self.workspace = Some(directory.clone());

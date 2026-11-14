@@ -2042,6 +2042,29 @@ pub fn text_field_ex(
     p: &Palette,
     id: Id,
 ) -> Response {
+    text_field_impl(ui, value, hint, invalid, enabled, false, p, id)
+}
+
+pub fn password_field(
+    ui: &mut Ui,
+    value: &mut String,
+    hint: &str,
+    p: &Palette,
+    id: Id,
+) -> Response {
+    text_field_impl(ui, value, hint, false, true, true, p, id)
+}
+
+fn text_field_impl(
+    ui: &mut Ui,
+    value: &mut String,
+    hint: &str,
+    invalid: bool,
+    enabled: bool,
+    password: bool,
+    p: &Palette,
+    id: Id,
+) -> Response {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(width, INPUT_HEIGHT),
@@ -2095,6 +2118,7 @@ pub fn text_field_ex(
     );
     let edit = egui::TextEdit::singleline(value)
         .id(id)
+        .password(password)
         .frame(egui::Frame::NONE)
         .margin(Margin::ZERO)
         .hint_text(
