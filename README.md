@@ -234,7 +234,8 @@ Open **Settings → General** to manage saved connections. The managed local ser
 endpoints or SSH hosts share the same page. The managed local server is always available and
 needs no entry. **Add server** saves an external HTTP endpoint; **Add SSH server** accepts a
 bare host, `user@host`, or a full command such as
-`ssh -p 2222 -i ~/.ssh/key user@example.com`. The SSH dialog rejects flags that replace the
+`ssh -p 2222 -i ~/.ssh/key user@example.com`. Set the optional remote folder to the
+directory the remote server should use. The SSH dialog rejects flags that replace the
 tunnel, `-o` keys that can run local commands, and re-validates the command on every
 connect.
 

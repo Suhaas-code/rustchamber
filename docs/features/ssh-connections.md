@@ -86,7 +86,7 @@ ssh -T -o ExitOnForwardFailure=yes -o ServerAliveInterval=15
 
 The remote command checks for OpenCode 2.x, reads the password from stdin, exports `OPENCODE_PASSWORD`, `OPENCODE_SERVER_PASSWORD`, and `OPENCODE_SERVER_USERNAME`, then starts the server in the background.
 
-A remote reader holds the channel open. When stdin closes or ssh dies, it kills the remote server.
+A foreground remote reader holds the channel open. When stdin closes or ssh dies, it kills the remote server.
 
 5. A missing or older remote OpenCode reports the requirement on stderr.
 6. Poll `http://127.0.0.1:L/api/info` with Basic auth for 45 seconds. A 401 fails at once with the health error.
@@ -120,7 +120,7 @@ Top right **Add server** button opens the shared popup menu with **Add server** 
 
 **Add server** dialog: endpoint URL, optional password, optional name.
 
-**Add SSH server** dialog: host or SSH command, optional server name, inline parse error. Submit stays disabled until validation passes.
+**Add SSH server** dialog: host or SSH command, optional remote folder, optional server name, inline parse error. Submit stays disabled until validation passes. The remote folder defaults to `.`.
 
 Dialogs use `widgets` dialog primitives, `text_field`, `password_field`, `menu_popup`, and theme tokens.
 

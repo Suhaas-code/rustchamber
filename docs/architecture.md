@@ -60,7 +60,8 @@ also send `x-opencode-directory` and a `directory` query parameter.
 ## Connections
 
 `connections.json` is the authority for saved servers. Each entry has an id, name, kind,
-raw endpoint or SSH command, optional endpoint password, creation time, and last use. The
+raw endpoint or SSH command, optional remote folder, optional endpoint password, creation
+time, and last use. The
 file uses atomic private writes, moves corrupt files aside, and backs up a future version
 before defaults load. The legacy settings endpoint seeds the first entry once; after that
 the settings fields are ignored.
@@ -79,7 +80,7 @@ ssh -T -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
 ```
 
 The remote command checks for OpenCode 2.x, reads the random password from stdin, exports
-the server password variables, then starts the server in the background. A background
+the server password variables, then starts the server in the background. A foreground
 reader holds the channel open; closing local stdin or losing ssh makes the remote shell
 kill the server. A remote bind collision retries with a new remote port up to three times.
 The client connects to the local loopback port, so the rest of the app treats SSH exactly

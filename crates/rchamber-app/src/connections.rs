@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-pub const CONNECTIONS_VERSION: u32 = 1;
+pub const CONNECTIONS_VERSION: u32 = 2;
 
 fn default_version() -> u32 {
     0
@@ -26,6 +26,7 @@ pub struct SavedConnection {
     pub kind: ConnectionKind,
     pub endpoint: String,
     pub ssh: String,
+    pub remote_directory: String,
     pub password: Option<String>,
     pub created_at: f64,
     pub last_used: f64,
@@ -40,6 +41,7 @@ impl fmt::Debug for SavedConnection {
             .field("kind", &self.kind)
             .field("endpoint", &self.endpoint)
             .field("ssh", &self.ssh)
+            .field("remote_directory", &self.remote_directory)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field("created_at", &self.created_at)
             .field("last_used", &self.last_used)
@@ -83,6 +85,7 @@ pub struct ConnectionDraft {
     pub name: String,
     pub kind: ConnectionKind,
     pub value: String,
+    pub remote_directory: String,
     pub password: Option<String>,
 }
 
@@ -94,6 +97,7 @@ impl fmt::Debug for ConnectionDraft {
             .field("name", &self.name)
             .field("kind", &self.kind)
             .field("value", &self.value)
+            .field("remote_directory", &self.remote_directory)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .finish()
     }
@@ -212,6 +216,7 @@ impl ConnectionsStore {
                 kind: ConnectionKind::Endpoint,
                 endpoint: endpoint.to_string(),
                 ssh: String::new(),
+                remote_directory: String::new(),
                 password: password
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
@@ -345,6 +350,11 @@ impl ConnectionsStore {
                 .filter(|password| !password.is_empty()),
             ConnectionKind::Ssh => None,
         };
+        let remote_directory = if draft.kind == ConnectionKind::Ssh {
+            draft.remote_directory.trim().to_string()
+        } else {
+            String::new()
+        };
         if let Some(id) = draft.id.as_deref()
             && let Some(connection) = self.connections.iter_mut().find(|entry| entry.id == id)
         {
@@ -360,6 +370,7 @@ impl ConnectionsStore {
             } else {
                 String::new()
             };
+            connection.remote_directory = remote_directory;
             connection.password = password;
             return connection.id.clone();
         }
@@ -378,6 +389,7 @@ impl ConnectionsStore {
             } else {
                 String::new()
             },
+            remote_directory,
             password,
             created_at: now,
             last_used: 0.0,
@@ -468,6 +480,7 @@ mod tests {
             name: String::new(),
             kind: ConnectionKind::Endpoint,
             value: value.into(),
+            remote_directory: String::new(),
             password: Some("secret".into()),
         }
     }
@@ -507,6 +520,7 @@ mod tests {
         assert!(store.active.is_none());
         assert_eq!(store.connections[0].endpoint, "http://127.0.0.1:1");
         assert!(store.connections[0].ssh.is_empty());
+        assert!(store.connections[0].remote_directory.is_empty());
         assert_eq!(store.connections[0].last_used, 0.0);
     }
 
@@ -519,6 +533,7 @@ mod tests {
                 name: "Remote".into(),
                 kind: ConnectionKind::Ssh,
                 value: "ssh -p 2222 me@example.com".into(),
+                remote_directory: "/srv/project".into(),
                 password: Some("ignored".into()),
             },
             5.0,
@@ -527,6 +542,7 @@ mod tests {
         assert!(entry.is_ssh());
         assert_eq!(entry.ssh, "ssh -p 2222 me@example.com");
         assert!(entry.endpoint.is_empty());
+        assert_eq!(entry.remote_directory, "/srv/project");
         assert!(entry.password.is_none());
         assert_eq!(entry.name, "Remote");
     }
@@ -542,6 +558,7 @@ mod tests {
                 name: "Renamed".into(),
                 kind: ConnectionKind::Endpoint,
                 value: "http://127.0.0.1:4200".into(),
+                remote_directory: String::new(),
                 password: None,
             },
             3.0,

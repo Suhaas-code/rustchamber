@@ -133,6 +133,7 @@ struct Inner {
     config: LaunchConfig,
     client: Option<Client>,
     server: Option<ServerHandle>,
+    ssh_directory: Option<String>,
     connections: ConnectionsStore,
     active: Option<String>,
     subscription: Option<rchamber_api::Subscription>,
@@ -162,12 +163,14 @@ enum Control {
 
 impl Inner {
     fn new(config: LaunchConfig, tx: UnboundedSender<BackendEvent>, wake: Wake) -> Self {
+        let ssh_directory = config.ssh_directory.clone();
         Self {
             tx,
             wake,
             config,
             client: None,
             server: None,
+            ssh_directory,
             connections: ConnectionsStore::load(),
             active: None,
             subscription: None,
@@ -267,7 +270,7 @@ impl Inner {
         let result = if let Some(target) = self.config.ssh.clone() {
             rchamber_api::ssh::launch(rchamber_api::SshLaunchOptions {
                 target,
-                directory: self.config.workspace.clone(),
+                directory: self.ssh_directory.clone(),
             })
             .await
         } else {
@@ -392,7 +395,7 @@ impl Inner {
         }
         self.load_mcp(&client).await;
         self.reload_snippets(client.directory());
-        if !self.tracked.is_empty() {
+        if self.config.ssh.is_some() || !self.tracked.is_empty() {
             self.refresh_sessions(&client).await;
         }
     }
@@ -436,6 +439,7 @@ impl Inner {
                     self.config.ssh = None;
                     self.config.endpoint = None;
                     self.config.password = None;
+                    self.ssh_directory = None;
                 }
             }
             self.connections
@@ -532,6 +536,7 @@ impl Inner {
                 agent,
                 allow_all,
             } => {
+                let directory = self.ssh_directory.clone().unwrap_or(directory);
                 let permissions = allow_all.then(|| {
                     serde_json::json!([
                         { "action": "*", "resource": "*", "effect": "allow" }
@@ -771,6 +776,13 @@ impl Inner {
                 Err(err) => self.error("Could not answer permission", err),
             },
             Action::SetWorkspace(directory) => {
+                if self.config.ssh.is_some() {
+                    self.emit(BackendEvent::Toast {
+                        kind: ToastKind::Info,
+                        message: "Edit the SSH connection to change its remote folder.".into(),
+                    });
+                    return Control::Continue;
+                }
                 self.config.workspace = Some(directory.clone());
                 let mut next = client.clone();
                 next.set_directory(Some(directory.clone()));
@@ -1979,6 +1991,19 @@ impl Inner {
     }
 
     async fn refresh_sessions(&mut self, client: &Client) {
+        if self.config.ssh.is_some() {
+            let request = client.clone();
+            let result = with_retry(|| {
+                let client = request.clone();
+                async move { client.list_sessions(200).await }
+            })
+            .await;
+            match result {
+                Ok(sessions) => self.emit(BackendEvent::Sessions(sessions)),
+                Err(err) => self.error("Could not refresh remote sessions", err),
+            }
+            return;
+        }
         if self.tracked.is_empty() {
             self.cached_sessions.clear();
             self.emit(BackendEvent::Sessions(Vec::new()));
@@ -2085,11 +2110,17 @@ impl Inner {
                 self.config.ssh = Some(connection.ssh.clone());
                 self.config.endpoint = None;
                 self.config.password = None;
+                self.ssh_directory = Some(if connection.remote_directory.trim().is_empty() {
+                    ".".to_string()
+                } else {
+                    connection.remote_directory.clone()
+                });
             }
             ConnectionKind::Endpoint => {
                 self.config.ssh = None;
                 self.config.endpoint = Some(connection.endpoint.clone());
                 self.config.password = connection.password.clone();
+                self.ssh_directory = None;
             }
         }
     }

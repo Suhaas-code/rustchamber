@@ -3501,6 +3501,16 @@ fn connection_dialog(ctx: &egui::Context, app: &mut RustChamber) {
                     Id::unique("connection-dialog/ssh"),
                 );
                 ui.add_space(6.0);
+                dialogs_connection_field(
+                    ui,
+                    &p,
+                    "Remote folder (optional)",
+                    ".",
+                    &mut state.remote_directory,
+                    false,
+                    Id::unique("connection-dialog/remote-directory"),
+                );
+                ui.add_space(6.0);
             }
             dialogs_connection_field(
                 ui,
@@ -3552,6 +3562,7 @@ fn connection_dialog(ctx: &egui::Context, app: &mut RustChamber) {
             name: state.name,
             kind: state.kind,
             value: state.value,
+            remote_directory: state.remote_directory,
             password: (state.kind == ConnectionKind::Endpoint)
                 .then_some(state.password)
                 .filter(|password| !password.trim().is_empty()),

@@ -228,12 +228,14 @@ fn remote_command(remote_port: u16) -> String {
     format!(
         "sh -c 'read -r pw || exit 1; \
          export OPENCODE_PASSWORD=\"$pw\" OPENCODE_SERVER_PASSWORD=\"$pw\" OPENCODE_SERVER_USERNAME=opencode; \
+         export PATH=\"$HOME/.opencode/bin:$HOME/.local/bin:$HOME/.bun/bin:$HOME/.npm-global/bin:$PATH\"; \
          command -v opencode >/dev/null 2>&1 || {{ echo \"RustChamber: OpenCode 2.x is required on the remote host.\" >&2; exit 127; }}; \
          major=$(opencode --version 2>/dev/null | sed -n \"s/^[^0-9]*\\([0-9][0-9]*\\)\\..*/\\1/p\" | head -n 1); \
          [ \"$major\" -ge 2 ] 2>/dev/null || {{ echo \"RustChamber: OpenCode 2.x is required on the remote host.\" >&2; exit 128; }}; \
          opencode serve --hostname 127.0.0.1 --port {remote_port} & child=$!; \
          trap \"kill $child 2>/dev/null\" HUP TERM INT; \
-         ( cat >/dev/null; kill $child 2>/dev/null ) & \
+         cat >/dev/null; \
+         kill $child 2>/dev/null; \
          wait $child'"
     )
 }
@@ -369,9 +371,16 @@ impl WaitFailure {
             .map(|health| format!(" Last health check: {health}"))
             .unwrap_or_default();
         match self {
-            WaitFailure::Exited { status, .. } => format!(
-                "The SSH connection to {destination} closed before OpenCode was ready: {status}.{detail}"
-            ),
+            WaitFailure::Exited { status, .. } => {
+                let hint = if status.to_lowercase().contains("permission denied") {
+                    " Load the SSH key into your agent with ssh-add and retry."
+                } else {
+                    ""
+                };
+                format!(
+                    "The SSH connection to {destination} closed before OpenCode was ready: {status}.{detail}{hint}"
+                )
+            }
             WaitFailure::Timeout { tail, .. } if !tail.is_empty() => format!(
                 "The SSH connection to {destination} did not become ready within {} seconds: {tail}.{detail}",
                 SSH_READY_TIMEOUT.as_secs()
@@ -439,7 +448,7 @@ where
     tokio::spawn(async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            tracing::debug!(target: "ssh", "stderr: {line}");
+            tracing::debug!("ssh stderr: {line}");
             let mut tail = tail.lock().unwrap_or_else(|error| error.into_inner());
             if tail.len() == STDERR_TAIL_LINES {
                 tail.pop_front();
@@ -623,6 +632,7 @@ mod tests {
         assert!(remote.contains("opencode serve --hostname 127.0.0.1 --port 42000"));
         assert!(remote.contains("read -r pw"));
         assert!(remote.contains("OPENCODE_SERVER_PASSWORD"));
+        assert!(remote.contains("$HOME/.opencode/bin"));
         assert!(!args.iter().any(|arg| arg.contains("--port 41000")));
     }
 }

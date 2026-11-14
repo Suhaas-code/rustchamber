@@ -304,6 +304,7 @@ pub struct ConnectionDialogState {
     pub kind: ConnectionKind,
     pub name: String,
     pub value: String,
+    pub remote_directory: String,
     pub password: String,
 }
 
@@ -314,6 +315,7 @@ impl ConnectionDialogState {
             kind,
             name: String::new(),
             value: String::new(),
+            remote_directory: String::new(),
             password: String::new(),
         }
     }
@@ -328,6 +330,7 @@ impl ConnectionDialogState {
             } else {
                 connection.endpoint.clone()
             },
+            remote_directory: connection.remote_directory.clone(),
             password: connection.password.clone().unwrap_or_default(),
         }
     }
@@ -594,20 +597,31 @@ impl RustChamber {
         }
         let ctx = cc.egui_ctx.clone();
         let wake = Arc::new(move || ctx.request_repaint()) as rchamber_app::Wake;
-        let (endpoint, password, ssh) = match model.connections.active_connection() {
-            Some(connection) if connection.is_ssh() => (None, None, Some(connection.ssh.clone())),
+        let (endpoint, password, ssh, ssh_directory) = match model.connections.active_connection() {
+            Some(connection) if connection.is_ssh() => (
+                None,
+                None,
+                Some(connection.ssh.clone()),
+                Some(if connection.remote_directory.trim().is_empty() {
+                    ".".to_string()
+                } else {
+                    connection.remote_directory.clone()
+                }),
+            ),
             Some(connection) => (
                 Some(connection.endpoint.clone()),
                 connection.password.clone(),
                 None,
+                None,
             ),
-            None => (None, None, None),
+            None => (None, None, None, None),
         };
         let config = LaunchConfig {
             workspace,
             endpoint,
             password,
             ssh,
+            ssh_directory,
         };
         let backend = Backend::spawn(config, Arc::clone(&wake));
         backend.send(Action::SetTrackedProjects(model.tracked_projects()));

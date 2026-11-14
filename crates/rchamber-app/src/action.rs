@@ -436,4 +436,5 @@ pub struct LaunchConfig {
     pub endpoint: Option<String>,
     pub password: Option<String>,
     pub ssh: Option<String>,
+    pub ssh_directory: Option<String>,
 }
