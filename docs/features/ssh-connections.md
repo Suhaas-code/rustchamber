@@ -84,11 +84,11 @@ ssh -T -o ExitOnForwardFailure=yes -o ServerAliveInterval=15
 
 `-T` prevents a pty from echoing the secret.
 
-The remote command checks for OpenCode 2.x, reads the password from stdin, exports `OPENCODE_PASSWORD`, `OPENCODE_SERVER_PASSWORD`, and `OPENCODE_SERVER_USERNAME`, then starts the server in the background.
+The remote command checks for OpenCode 2.x, reads the password from stdin, exports `OPENCODE_PASSWORD`, `OPENCODE_SERVER_PASSWORD`, and `OPENCODE_SERVER_USERNAME`, then starts the server in the background. It uses only POSIX shell builtins and expansion during the version check, so minimal hosts work.
 
-A foreground remote reader holds the channel open. When stdin closes or ssh dies, it kills the remote server.
+A foreground remote reader holds the channel open. When stdin closes or ssh dies, the exit trap kills the remote server.
 
-5. A missing or older remote OpenCode reports the requirement on stderr.
+5. A missing or older remote OpenCode reports the requirement on stderr. Failures are classified into a cause and a next step before they reach the UI.
 6. Poll `http://127.0.0.1:L/api/info` with Basic auth for 45 seconds. A 401 fails at once with the health error.
 7. The ssh child and its stdin hang off `ServerHandle` with `kill_on_drop`. Dropping the handle closes stdin and kills ssh.
 8. The backend checks the ssh child once per second. An exit emits `Connection::Failed` and reconnects.
@@ -136,15 +136,19 @@ The tunnel binds `127.0.0.1` locally. Remote serve binds `127.0.0.1` remotely.
 
 The password travels over stdin, never argv. Logs record `password_len` only.
 
-SSH authentication uses the user agent and keys. The app stores nothing.
+SSH authentication uses the user agent and keys. The app stores nothing. Interactive password and keyboard prompts are unsupported; failures say so.
 
 `accept-new` is an explicit first use trust decision.
 
+`-F` config files are confined to `~/.ssh` or `/etc/ssh`, because a config file can run local commands. Other unsafe `-o` keys stay blocked.
+
 ## Testing
 
-Parser: every accepted form, each rejected flag, unsafe `-o` keys, two destinations, metacharacters, empty input.
+Parser: every accepted form, each rejected flag, unsafe `-o` keys, config path confinement, two destinations, metacharacters, empty input.
 
-Argument construction: `-T`, forward, destination, remote command, password env vars.
+Argument construction: `-T`, forward, destination, remote command, password env vars, POSIX only remote script, `sh -n` syntax.
+
+Failure classification: auth, host key, forwarding, missing binary, version, shell, resolve, network, config.
 
 Store: roundtrip, old files, unversioned files, corrupt file, invalid UTF 8, future version, failed writes, permissions, migration, active cleanup.
 
@@ -157,6 +161,14 @@ CI gates: fmt, clippy `-D warnings`, workspace tests on Linux, macOS, and Window
 Flatpak routes ssh through `flatpak-spawn --host`.
 
 Windows compiles; SSH connections there are untested.
+
+Remote hosts need a POSIX `sh`. Windows OpenSSH remotes are unsupported.
+
+The server must allow local TCP forwarding for the account. Forced commands and jump only accounts fail with a policy message.
+
+Password and keyboard interactive login are unsupported. Use an agent backed key.
+
+The remote OpenCode binary must be on the default PATH or in `~/.opencode/bin`, `~/.local/bin`, `~/.bun/bin`, or `~/.npm-global/bin`.
 
 Remote projects use remote paths. The open project path must exist on the remote host. RustChamber does not translate paths. Remote projects are listed under their connection in Add project and are never marked missing.
 

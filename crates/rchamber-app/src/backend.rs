@@ -570,7 +570,9 @@ impl Inner {
                                 .await;
                         }
                     }
-                    Err(err) => self.error("Could not create session", err),
+                    Err(err) => {
+                        self.error("Could not create session", remote_error(&directory, err))
+                    }
                 }
             }
             Action::Send {
@@ -2006,7 +2008,13 @@ impl Inner {
             .await;
             match result {
                 Ok(sessions) => self.emit(BackendEvent::Sessions(sessions)),
-                Err(err) => self.error("Could not refresh remote sessions", err),
+                Err(err) => {
+                    let directory = self.ssh_directory.clone().unwrap_or_else(|| ".".into());
+                    self.error(
+                        "Could not refresh remote sessions",
+                        remote_error(&directory, err),
+                    )
+                }
             }
             return;
         }
@@ -2253,6 +2261,18 @@ fn validate_connection_draft(draft: &ConnectionDraft) -> Result<(), String> {
             .map(|_| ())
             .map_err(|error| error.to_string()),
     }
+}
+
+fn remote_error(directory: &str, error: ApiError) -> ApiError {
+    let ApiError::Status { message, .. } = &error else {
+        return error;
+    };
+    if message.contains("LocationNotFoundError") || message.contains("Location not found") {
+        return ApiError::Other(format!(
+            "Remote folder `{directory}` is not a registered OpenCode project on this server. Add it on the remote host or edit the SSH connection to use an existing folder."
+        ));
+    }
+    error
 }
 
 fn event_kind(event: &BackendEvent) -> &'static str {

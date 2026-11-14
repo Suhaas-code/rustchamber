@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -18,15 +19,19 @@ const VALUE_FLAGS: &[char] = &['p', 'i', 'J', 'o', 'F', 'l'];
 const BOOL_FLAGS: &[char] = &['4', '6', 'a', 'C', 'T', 'v', 'q'];
 const SAFE_OPTIONS: &[&str] = &[
     "addressfamily",
+    "certificatefile",
     "ciphers",
     "compression",
     "connecttimeout",
+    "connectionattempts",
     "hostkeyalgorithms",
+    "identityagent",
     "identityfile",
     "identitiesonly",
     "ipqos",
     "port",
     "preferredauthentications",
+    "proxyjump",
     "pubkeyauthentication",
     "serveralivecountmax",
     "serveraliveinterval",
@@ -56,6 +61,8 @@ pub enum SshError {
         "The SSH option `{0}` can run local commands or change the tunnel and is not supported."
     )]
     UnsafeOption(String),
+    #[error("The SSH config file {0} must be inside ~/.ssh or /etc/ssh.")]
+    UnsafeConfigPath(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -151,6 +158,9 @@ fn parse_flag(
             if flag == 'o' {
                 validate_option(&value)?;
             }
+            if flag == 'F' {
+                validate_config_path(&value)?;
+            }
             args.push(short);
             args.push(value);
             return Ok(());
@@ -175,6 +185,70 @@ fn validate_option(value: &str) -> Result<(), SshError> {
     } else {
         Err(SshError::UnsafeOption(value.to_string()))
     }
+}
+
+/// `-F` can point at any file, and a config file can run local commands through
+/// `ProxyCommand` or `Match exec`. Keep it inside the user or system SSH
+/// directories so a pasted connection string cannot load arbitrary config.
+fn validate_config_path(value: &str) -> Result<(), SshError> {
+    let path = expand_home(value);
+    let resolved = match path.canonicalize() {
+        Ok(path) => path,
+        Err(_) => {
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let Ok(parent) = parent.canonicalize() else {
+                return Err(SshError::UnsafeConfigPath(value.to_string()));
+            };
+            match path.file_name() {
+                Some(name) => parent.join(name),
+                None => return Err(SshError::UnsafeConfigPath(value.to_string())),
+            }
+        }
+    };
+    if config_roots().iter().any(|root| resolved.starts_with(root)) {
+        Ok(())
+    } else {
+        Err(SshError::UnsafeConfigPath(value.to_string()))
+    }
+}
+
+fn config_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = home_dir()
+        && let Ok(path) = home.join(".ssh").canonicalize()
+    {
+        roots.push(path);
+    }
+    #[cfg(unix)]
+    if let Ok(path) = Path::new("/etc/ssh").canonicalize() {
+        roots.push(path);
+    }
+    roots
+}
+
+fn expand_home(value: &str) -> PathBuf {
+    let trimmed = value.trim();
+    if let Some(rest) = trimmed.strip_prefix("~/")
+        && let Some(home) = home_dir()
+    {
+        return home.join(rest);
+    }
+    if trimmed == "~"
+        && let Some(home) = home_dir()
+    {
+        return home;
+    }
+    PathBuf::from(trimmed)
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|home| !home.is_empty()))
+        .map(PathBuf::from)
 }
 
 fn validate_destination(destination: &str) -> Result<(), SshError> {
@@ -223,17 +297,22 @@ pub fn serve_args(target: &SshTarget, local_port: u16, remote_port: u16) -> Vec<
 
 fn remote_command(remote_port: u16) -> String {
     // The password arrives on stdin so it never appears in a local process list.
-    // The background reader makes the remote server follow the ssh channel: when
-    // the channel closes, stdin reaches EOF and the child is killed.
+    // The foreground reader makes the remote server follow the ssh channel: when
+    // the channel closes, stdin reaches EOF and the child is killed. The command
+    // uses only POSIX shell builtins and expansion so minimal hosts still work.
     format!(
         "sh -c 'read -r pw || exit 1; \
          export OPENCODE_PASSWORD=\"$pw\" OPENCODE_SERVER_PASSWORD=\"$pw\" OPENCODE_SERVER_USERNAME=opencode; \
          export PATH=\"$HOME/.opencode/bin:$HOME/.local/bin:$HOME/.bun/bin:$HOME/.npm-global/bin:$PATH\"; \
          command -v opencode >/dev/null 2>&1 || {{ echo \"RustChamber: OpenCode 2.x is required on the remote host.\" >&2; exit 127; }}; \
-         major=$(opencode --version 2>/dev/null | sed -n \"s/^[^0-9]*\\([0-9][0-9]*\\)\\..*/\\1/p\" | head -n 1); \
+         rest=$(opencode --version 2>/dev/null); \
+         while [ -n \"$rest\" ]; do case $rest in [0-9]*) break ;; *) rest=${{rest#?}} ;; esac; done; \
+         major=${{rest%%.*}}; major=${{major%%[!0-9]*}}; \
+         [ -n \"$major\" ] || major=0; \
+         case $major in *[!0-9]*) major=0 ;; esac; \
          [ \"$major\" -ge 2 ] 2>/dev/null || {{ echo \"RustChamber: OpenCode 2.x is required on the remote host.\" >&2; exit 128; }}; \
          opencode serve --hostname 127.0.0.1 --port {remote_port} & child=$!; \
-         trap \"kill $child 2>/dev/null\" HUP TERM INT; \
+         trap \"kill $child 2>/dev/null\" HUP TERM INT EXIT; \
          cat >/dev/null; \
          kill $child 2>/dev/null; \
          wait $child'"
@@ -250,6 +329,7 @@ pub struct SshLaunchOptions {
 pub async fn launch(options: SshLaunchOptions) -> Result<ServerHandle, ApiError> {
     let target =
         parse_target(&options.target).map_err(|error| ApiError::Config(error.to_string()))?;
+    let mut retried_transient = false;
     for attempt in 0..SSH_ATTEMPTS {
         let local_port =
             free_port().map_err(|error| ApiError::Other(format!("no free port: {error}")))?;
@@ -321,8 +401,11 @@ pub async fn launch(options: SshLaunchOptions) -> Result<ServerHandle, ApiError>
                 });
             }
             Err(failure) => {
-                let text = failure.describe(&target.destination);
-                let retry = failure.is_port_collision() && attempt + 1 < SSH_ATTEMPTS;
+                let text =
+                    failure.describe(&target.destination, local_port, remote_port, &password);
+                let retry = (failure.is_port_collision()
+                    || transient_retry(&mut retried_transient, &failure))
+                    && attempt + 1 < SSH_ATTEMPTS;
                 stdin.take();
                 let _ = child.start_kill();
                 if !retry {
@@ -346,6 +429,108 @@ enum WaitFailure {
     Health(String),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailureKind {
+    AuthKey,
+    AuthInteractive,
+    TooManyKeys,
+    HostKey,
+    ForwardingDenied,
+    RemoteRefused,
+    MissingCommand,
+    MissingBinary,
+    Version,
+    Resolve,
+    Unreachable,
+    Closed,
+    BadConfig,
+    NonPosixShell,
+}
+
+fn classify_failure(status: &str, tail: &str) -> Option<FailureKind> {
+    let text = format!("{status}\n{tail}").to_ascii_lowercase();
+    let exit = status
+        .strip_prefix("exit status:")
+        .and_then(|rest| rest.trim().parse::<i32>().ok());
+    if text.contains("permission denied (publickey") {
+        return Some(FailureKind::AuthKey);
+    }
+    if text.contains("permission denied (keyboard-interactive")
+        || text.contains("permission denied (password")
+    {
+        return Some(FailureKind::AuthInteractive);
+    }
+    if text.contains("too many authentication failures") {
+        return Some(FailureKind::TooManyKeys);
+    }
+    if text.contains("host key verification failed")
+        || text.contains("remote host identification has changed")
+    {
+        return Some(FailureKind::HostKey);
+    }
+    if text.contains("remote port forwarding failed")
+        || text.contains("administratively prohibited")
+    {
+        return Some(FailureKind::ForwardingDenied);
+    }
+    if text.contains("channel")
+        && text.contains("connect failed")
+        && text.contains("connection refused")
+    {
+        return Some(FailureKind::RemoteRefused);
+    }
+    if text.contains("rustchamber: opencode 2.x is required") {
+        return Some(match exit {
+            Some(128) => FailureKind::Version,
+            _ => FailureKind::MissingBinary,
+        });
+    }
+    if text.contains("syntax error")
+        || text.contains("illegal option")
+        || text.contains("sh: not found")
+    {
+        return Some(FailureKind::NonPosixShell);
+    }
+    if exit == Some(127) {
+        return Some(FailureKind::MissingCommand);
+    }
+    if text.contains("could not resolve hostname") {
+        return Some(FailureKind::Resolve);
+    }
+    if text.contains("bad configuration option") {
+        return Some(FailureKind::BadConfig);
+    }
+    if text.contains("connection timed out")
+        || text.contains("no route to host")
+        || text.contains("network is unreachable")
+        || text.contains("kex_exchange_identification")
+    {
+        return Some(FailureKind::Unreachable);
+    }
+    if text.contains("connection reset")
+        || text.contains("connection closed by")
+        || text.contains("closed by remote host")
+    {
+        return Some(FailureKind::Closed);
+    }
+    None
+}
+
+fn redact(text: &str, secret: &str) -> String {
+    if secret.is_empty() {
+        return text.to_string();
+    }
+    text.replace(secret, "[redacted]")
+}
+
+fn transient_retry(retried: &mut bool, failure: &WaitFailure) -> bool {
+    if *retried || !failure.is_transient() {
+        return false;
+    }
+    *retried = true;
+    true
+}
+
 impl WaitFailure {
     fn tail_text(&self) -> String {
         match self {
@@ -360,7 +545,21 @@ impl WaitFailure {
         tail.contains("remote port forwarding failed") || tail.contains("address already in use")
     }
 
-    fn describe(&self, destination: &str) -> String {
+    fn is_transient(&self) -> bool {
+        let tail = self.tail_text().to_lowercase();
+        tail.contains("connection timed out")
+            || tail.contains("no route to host")
+            || tail.contains("network is unreachable")
+            || tail.contains("connection reset")
+    }
+
+    fn describe(
+        &self,
+        destination: &str,
+        local_port: u16,
+        remote_port: u16,
+        secret: &str,
+    ) -> String {
         let health = match self {
             WaitFailure::Exited { health, .. } | WaitFailure::Timeout { health, .. } => {
                 health.as_deref()
@@ -368,30 +567,94 @@ impl WaitFailure {
             WaitFailure::Health(message) => Some(message.as_str()),
         };
         let detail = health
-            .map(|health| format!(" Last health check: {health}"))
+            .map(|health| format!(" Last health check: {}.", redact(health, secret)))
             .unwrap_or_default();
         match self {
             WaitFailure::Exited { status, .. } => {
-                let hint = if status.to_lowercase().contains("permission denied") {
-                    " Load the SSH key into your agent with ssh-add and retry."
-                } else {
-                    ""
-                };
-                format!(
-                    "The SSH connection to {destination} closed before OpenCode was ready: {status}.{detail}{hint}"
-                )
+                let status = redact(status, secret);
+                let tail = redact(&self.tail_text(), secret);
+                let cause = exited_cause(
+                    destination,
+                    local_port,
+                    remote_port,
+                    classify_failure(&status, &tail),
+                );
+                format!("{cause} The ssh process reported: {status}.{detail}")
             }
-            WaitFailure::Timeout { tail, .. } if !tail.is_empty() => format!(
-                "The SSH connection to {destination} did not become ready within {} seconds: {tail}.{detail}",
-                SSH_READY_TIMEOUT.as_secs()
-            ),
-            WaitFailure::Timeout { .. } => format!(
-                "The SSH connection to {destination} did not become ready within {} seconds.{detail}",
-                SSH_READY_TIMEOUT.as_secs()
-            ),
+            WaitFailure::Timeout { tail, .. } => {
+                let tail = redact(tail, secret);
+                let cause = if tail.is_empty() {
+                    format!(
+                        "The SSH connection to {destination} did not become ready within {} seconds.",
+                        SSH_READY_TIMEOUT.as_secs()
+                    )
+                } else {
+                    format!(
+                        "The SSH connection to {destination} did not become ready within {} seconds. Last ssh output: {tail}.",
+                        SSH_READY_TIMEOUT.as_secs()
+                    )
+                };
+                format!("{cause}{detail}")
+            }
             WaitFailure::Health(message) => format!(
-                "The SSH connection to {destination} reached a server but the health check failed: {message}"
+                "The SSH tunnel to {destination} reached a server but authentication failed: {}. Check the saved connection and retry.{detail}",
+                redact(message, secret)
             ),
+        }
+    }
+}
+
+fn exited_cause(
+    destination: &str,
+    local_port: u16,
+    remote_port: u16,
+    kind: Option<FailureKind>,
+) -> String {
+    match kind {
+        Some(FailureKind::AuthKey) => format!(
+            "Authentication to {destination} failed because the server rejected the offered key. Run `ssh-add <key>` and check that `ssh-add -l` lists it."
+        ),
+        Some(FailureKind::AuthInteractive) => format!(
+            "Authentication to {destination} needs a password or keyboard prompt, which RustChamber does not support. Use an agent-backed key instead."
+        ),
+        Some(FailureKind::TooManyKeys) => format!(
+            "The SSH agent offered too many keys to {destination}. Retry with `-o IdentitiesOnly=yes -i <key>` in the connection command."
+        ),
+        Some(FailureKind::HostKey) => format!(
+            "The host key for {destination} changed or could not be verified. Confirm the host, run `ssh-keygen -R {destination}`, then reconnect."
+        ),
+        Some(FailureKind::ForwardingDenied) => format!(
+            "The server refused local port forwarding for {destination}. An administrator must allow TCP forwarding (AllowTcpForwarding) for this account."
+        ),
+        Some(FailureKind::RemoteRefused) => format!(
+            "The tunnel to {destination} opened but nothing is listening on remote port {remote_port}. The remote OpenCode server exited; read the ssh output for its error."
+        ),
+        Some(FailureKind::MissingBinary) => format!(
+            "OpenCode 2.x was not found on {destination}. The remote PATH search covers $HOME/.opencode/bin, $HOME/.local/bin, $HOME/.bun/bin, and $HOME/.npm-global/bin. Install OpenCode or symlink it into one of those folders."
+        ),
+        Some(FailureKind::Version) => format!(
+            "OpenCode on {destination} is older than version 2. Install OpenCode 2.x on the remote host."
+        ),
+        Some(FailureKind::MissingCommand) => format!(
+            "The remote command on {destination} could not find a required tool. A POSIX shell with standard utilities is required."
+        ),
+        Some(FailureKind::NonPosixShell) => format!(
+            "The remote host {destination} did not provide a POSIX sh or rejected the command syntax. Use a POSIX account, or change the remote login shell."
+        ),
+        Some(FailureKind::Resolve) => format!(
+            "The host name for {destination} could not be resolved. Check the spelling, DNS, and any Host alias in ~/.ssh/config."
+        ),
+        Some(FailureKind::Unreachable) => format!(
+            "RustChamber could not reach {destination} on local port {local_port}. Check VPN, firewall rules, and bastion settings."
+        ),
+        Some(FailureKind::Closed) => format!(
+            "The connection to {destination} closed unexpectedly. If this is a jump-only account, remote command execution is likely blocked by policy."
+        ),
+        Some(FailureKind::BadConfig) => format!(
+            "The SSH configuration for {destination} contains an invalid option. Check ~/.ssh/config and any -F file."
+        ),
+        None => {
+            format!("The SSH connection to {destination} closed before OpenCode was ready.")
         }
     }
 }
@@ -634,5 +897,169 @@ mod tests {
         assert!(remote.contains("OPENCODE_SERVER_PASSWORD"));
         assert!(remote.contains("$HOME/.opencode/bin"));
         assert!(!args.iter().any(|arg| arg.contains("--port 41000")));
+    }
+
+    #[test]
+    fn config_files_are_confined_to_the_ssh_directories() {
+        assert!(matches!(
+            parse_target("ssh -F /tmp/evil-config host"),
+            Err(SshError::UnsafeConfigPath(_))
+        ));
+        assert!(matches!(
+            parse_target("ssh -F ../../evil host"),
+            Err(SshError::UnsafeConfigPath(_))
+        ));
+    }
+
+    #[test]
+    fn accepts_organization_options_without_local_commands() {
+        for option in [
+            "CertificateFile=~/.ssh/id_ed25519-cert.pub",
+            "IdentityAgent=~/.1password/agent.sock",
+            "ConnectionAttempts=2",
+            "ProxyJump=bastion.example.com",
+        ] {
+            assert!(
+                parse_target(&format!("ssh -o {option} host")).is_ok(),
+                "{option}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_script_uses_only_posix_shell_tools() {
+        let target = parse_target("host").unwrap();
+        let args = serve_args(&target, 41000, 42000);
+        let remote = args.last().unwrap();
+        assert!(!remote.contains("sed "), "sed is not portable");
+        assert!(!remote.contains("head -n"), "head is not portable");
+        assert_eq!(
+            remote.matches('\'').count(),
+            2,
+            "embedded single quotes break the outer sh -c wrapper"
+        );
+        assert!(remote.contains(" EXIT"), "remote server needs an EXIT trap");
+        #[cfg(unix)]
+        {
+            let status = std::process::Command::new("sh")
+                .arg("-n")
+                .arg("-c")
+                .arg(remote)
+                .status()
+                .expect("run sh");
+            assert!(status.success(), "remote script must be valid POSIX sh");
+        }
+    }
+
+    #[test]
+    fn classifies_common_ssh_failures() {
+        let cases = [
+            (
+                "exit status: 255",
+                "user@host: Permission denied (publickey).",
+                FailureKind::AuthKey,
+            ),
+            (
+                "exit status: 255",
+                "Permission denied (keyboard-interactive,password).",
+                FailureKind::AuthInteractive,
+            ),
+            (
+                "exit status: 255",
+                "Received disconnect: Too many authentication failures",
+                FailureKind::TooManyKeys,
+            ),
+            (
+                "exit status: 255",
+                "Host key verification failed.",
+                FailureKind::HostKey,
+            ),
+            (
+                "exit status: 255",
+                "remote port forwarding failed for listen port 42000",
+                FailureKind::ForwardingDenied,
+            ),
+            (
+                "exit status: 255",
+                "channel 2: open failed: connect failed: Connection refused",
+                FailureKind::RemoteRefused,
+            ),
+            (
+                "exit status: 127",
+                "RustChamber: OpenCode 2.x is required on the remote host.",
+                FailureKind::MissingBinary,
+            ),
+            (
+                "exit status: 128",
+                "RustChamber: OpenCode 2.x is required on the remote host.",
+                FailureKind::Version,
+            ),
+            (
+                "exit status: 127",
+                "sh: 1: op: not found",
+                FailureKind::MissingCommand,
+            ),
+            (
+                "exit status: 2",
+                "sh: 1: Syntax error: \"(\" unexpected",
+                FailureKind::NonPosixShell,
+            ),
+            (
+                "exit status: 255",
+                "ssh: Could not resolve hostname nope: Name or service not known",
+                FailureKind::Resolve,
+            ),
+            (
+                "exit status: 255",
+                "/Users/me/.ssh/config: line 1: Bad configuration option: Whatever",
+                FailureKind::BadConfig,
+            ),
+            (
+                "exit status: 255",
+                "ssh: connect to host example.com port 22: Connection timed out",
+                FailureKind::Unreachable,
+            ),
+            (
+                "exit status: 255",
+                "Connection closed by 10.0.0.1 port 22",
+                FailureKind::Closed,
+            ),
+        ];
+        for (status, tail, expected) in cases {
+            assert_eq!(
+                classify_failure(status, tail),
+                Some(expected),
+                "{status} / {tail}"
+            );
+        }
+    }
+
+    #[test]
+    fn failure_descriptions_name_the_cause_and_redact_secrets() {
+        let failure = WaitFailure::Exited {
+            status: "exit status: 255: Permission denied (publickey).".into(),
+            health: Some("secret-token rejected".into()),
+        };
+        let message = failure.describe("me@example.com", 41000, 42000, "secret-token");
+        assert!(message.contains("rejected the offered key"), "{message}");
+        assert!(message.contains("ssh-add"), "{message}");
+        assert!(!message.contains("secret-token"), "{message}");
+    }
+
+    #[test]
+    fn timeout_failure_uses_readiness_window() {
+        let failure = WaitFailure::Timeout {
+            tail: "banner exchange".into(),
+            health: Some("health request timed out".into()),
+        };
+        let message = failure.describe("host", 41000, 42000, "");
+        assert!(
+            message.contains(&format!(
+                "did not become ready within {} seconds",
+                SSH_READY_TIMEOUT.as_secs()
+            )),
+            "{message}"
+        );
+        assert!(message.contains("banner exchange"), "{message}");
     }
 }

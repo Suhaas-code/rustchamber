@@ -88,7 +88,8 @@ like an endpoint. The ssh child and its stdin hang off `ServerHandle`; dropping 
 kills both. The backend also checks the ssh child once per second and reconnects if the
 tunnel dies. Flatpak routes the host `ssh` through `flatpak-spawn --host`. Project lists
 are cached per connection, so the Add project dialog shows one rail entry per saved server
-and imports from the server that reported the project.
+and imports from the server that reported the project. SSH startup failures are classified
+into a cause, the ssh evidence, and a next step, so the UI never shows a bare exit status.
 
 ## Events
 
