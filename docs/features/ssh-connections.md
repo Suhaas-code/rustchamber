@@ -170,7 +170,7 @@ Password and keyboard interactive login are unsupported. Use an agent backed key
 
 The remote OpenCode binary must be on the default PATH or in `~/.opencode/bin`, `~/.local/bin`, `~/.bun/bin`, or `~/.npm-global/bin`.
 
-Remote projects use remote paths. The open project path must exist on the remote host. RustChamber does not translate paths. Remote projects are listed under their connection in Add project and are never marked missing.
+Remote projects use remote paths. The open project path must exist on the remote host. RustChamber does not translate paths. Remote projects are listed under their connection in Add project and are never marked missing. Projects added from an SSH host remember that server, and project lists show its name as a badge beside the project.
 
 Tunnel reconnect has no backoff cap yet.
 

@@ -542,6 +542,16 @@ fn target_selector(
                 true,
                 p,
             );
+            if let Some(server) = app.model.project_server(project) {
+                let galley = ui.painter().layout_no_wrap(
+                    project.display_name().to_string(),
+                    theme::font(theme::TEXT_UI_LABEL),
+                    p.fg,
+                );
+                let x = (item.rect.left() + 30.0 + galley.size().x + 8.0)
+                    .min(item.rect.right() - widgets::server_tag_width(ui, &server) - 10.0);
+                widgets::paint_server_badge(ui, x, item.rect.center().y, &server, p);
+            }
             if item.clicked() {
                 chosen = Some(project.id.clone());
             }

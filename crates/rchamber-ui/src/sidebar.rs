@@ -15,6 +15,7 @@ use crate::chrome;
 use crate::icons::{self, Icon};
 use crate::motion;
 use crate::theme::{self, Palette};
+use crate::widgets;
 
 const HEADER_BAND: f32 = 40.0;
 const HEADER_PAD_X: f32 = 12.0;
@@ -607,10 +608,18 @@ fn header(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
         let branch = project
             .as_ref()
             .and_then(|project| project_branch(ui.ctx(), &project.canonical));
+        let server = project
+            .as_ref()
+            .and_then(|project| app.model.project_server(project));
+        let server_room = server
+            .as_ref()
+            .map(|label| widgets::server_tag_width(ui, label) + 6.0)
+            .unwrap_or(0.0);
         let chip_room = branch
             .as_ref()
             .map(|branch| tag_width(ui, branch) + 6.0)
-            .unwrap_or(0.0);
+            .unwrap_or(0.0)
+            + server_room;
         let room = (right - rect.left() - HEADER_PAD_X - chip_room).max(40.0);
         let galley = WidgetText::from(
             RichText::new(name)
@@ -629,9 +638,24 @@ fn header(ui: &mut Ui, app: &mut RustChamber, p: &Palette) {
             galley.clone(),
             p.fg,
         );
+        let mut chip_x = left + galley.size().x + 6.0;
+        if let Some(server) = server {
+            let width = widgets::server_tag_width(ui, &server);
+            chip_x = chip_x.min(right - width);
+            widgets::paint_server_tag(
+                ui,
+                Rect::from_min_size(
+                    egui::Pos2::new(chip_x, rect.center().y - theme::TAG_HEIGHT * 0.5),
+                    Vec2::new(width, theme::TAG_HEIGHT),
+                ),
+                &server,
+                p,
+            );
+            chip_x += width + 6.0;
+        }
         if let Some(branch) = branch {
             let width = tag_width(ui, &branch);
-            let x = (left + galley.size().x + 6.0).min(right - width);
+            let x = chip_x.min(right - width);
             paint_tag(
                 ui,
                 Rect::from_min_size(
@@ -1580,6 +1604,11 @@ fn project_header(
     } else {
         p.fg.lerp_to_gamma(p.fg_muted, 0.15)
     };
+    let server = app.model.project_server(project);
+    let server_room = server
+        .as_ref()
+        .map(|label| widgets::server_tag_width(ui, label) + 6.0)
+        .unwrap_or(0.0);
     let galley = WidgetText::from(
         RichText::new(project.display_name())
             .font(theme::font_medium(theme::TEXT_UI_SECTION))
@@ -1588,7 +1617,7 @@ fn project_header(
     .into_galley(
         ui,
         Some(egui::TextWrapMode::Truncate),
-        (plus_rect.left() - label_left - 16.0).max(40.0),
+        (plus_rect.left() - label_left - 16.0 - server_room).max(40.0),
         TextStyle::Body,
     );
     ui.painter().galley(
@@ -1596,6 +1625,12 @@ fn project_header(
         galley.clone(),
         label_color,
     );
+    let mut after_label = label_left + galley.size().x;
+    if let Some(server) = server {
+        let width = widgets::server_tag_width(ui, &server);
+        let x = (after_label + 6.0).min(plus_rect.left() - width - 4.0);
+        after_label = widgets::paint_server_badge(ui, x, slot.center().y, &server, p) + 4.0;
+    }
     icons::paint(
         ui,
         if collapsed {
@@ -1604,7 +1639,7 @@ fn project_header(
             Icon::ChevronDown
         },
         Rect::from_center_size(
-            egui::Pos2::new(label_left + galley.size().x + 10.0, slot.center().y),
+            egui::Pos2::new(after_label + 6.0, slot.center().y),
             Vec2::splat(12.0),
         ),
         p.fg_muted,
@@ -4914,6 +4949,7 @@ mod tests {
             color: None,
             hidden: false,
             added_at: 1.0,
+            server: None,
         };
         assert_eq!(project_color(&project, &p), project_color(&project, &p));
         let mut other = project.clone();

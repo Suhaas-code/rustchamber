@@ -12,7 +12,7 @@ use crate::action::{
     BackendEvent, Connection, ExecutionState, LiveEvent, ToastKind, TrackedProject,
 };
 use crate::attachments::AttachmentItem;
-use crate::connections::ConnectionsStore;
+use crate::connections::{ConnectionKind, ConnectionsStore};
 use crate::snippets::Snippet;
 use crate::workspace::{ProjectEntry, WorkspaceStore, paths_match};
 
@@ -1232,6 +1232,42 @@ impl AppModel {
             .unwrap_or_default()
     }
 
+    /// Human name for a saved server, or `None` for the local server.
+    pub fn connection_label(&self, key: &str) -> Option<String> {
+        if key == crate::connections::LOCAL_SERVER_KEY {
+            return None;
+        }
+        self.connections
+            .connections()
+            .iter()
+            .find(|connection| connection.id == key)
+            .map(|connection| connection.display_name())
+    }
+
+    /// Server label for a project, shown as a badge in project lists. Falls
+    /// back to the remote listings for entries saved before projects tracked
+    /// their server.
+    pub fn project_server(&self, project: &ProjectEntry) -> Option<String> {
+        if let Some(key) = project.server.as_deref() {
+            return self.connection_label(key);
+        }
+        if std::path::Path::new(&project.canonical).is_dir() {
+            return None;
+        }
+        let mut matches = self.connections.connections().iter().filter(|connection| {
+            connection.kind == ConnectionKind::Ssh
+                && self
+                    .projects_for_connection(&connection.id)
+                    .iter()
+                    .any(|remote| paths_match(&remote.canonical, &project.canonical))
+        });
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(first.display_name())
+    }
+
     pub fn project_by_id(&self, id: &str) -> Option<&ProjectEntry> {
         self.workspace_store
             .projects
@@ -1245,6 +1281,19 @@ impl AppModel {
 
     pub fn add_project(&mut self, directory: &str, name: Option<&str>) -> String {
         let id = self.workspace_store.add_local_project(directory, name);
+        self.workspace_store.save();
+        id
+    }
+
+    pub fn add_remote_project(
+        &mut self,
+        directory: &str,
+        name: Option<&str>,
+        server: &str,
+    ) -> String {
+        let id = self
+            .workspace_store
+            .add_remote_project(directory, name, server);
         self.workspace_store.save();
         id
     }
